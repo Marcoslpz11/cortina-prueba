@@ -36,8 +36,8 @@
     transform: translate(-50%, -50%);
     z-index: 11;
     font-size: 15px; padding: 12px 32px;
-    background: #f3efe4; color: #26215c;
-    border: 1px solid #b9b2a0; border-radius: 999px;
+    background: #faf3e3; color: #8a5a2b;
+    border: 1px solid #dcc196; border-radius: 999px;
     cursor: pointer;
     transition: opacity .4s;
   }
@@ -260,7 +260,7 @@ function draw(prog) {
   }
 
   // Barra
-  ctx.strokeStyle = '#7a5c3a';
+  ctx.strokeStyle = '#a67c4a';
   ctx.lineWidth = 7;
   ctx.lineCap = 'round';
   ctx.beginPath();
@@ -281,16 +281,20 @@ function draw(prog) {
         // Sombreado falso por compresión horizontal (pliegues)
         const sh = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
 
-        // UV en reposo → círculo blanco del logo, deformado con la tela
+        // UV en reposo → círculo del emblema, deformado con la tela
         const u = ((p1.rx + p2.rx) / 2) / W;
         const v = ((p1.ry + p4.ry) / 2 - rodY) / clothH;
         const du = u - logoCx;
         const dv = (v - logoCy) * (clothH / W);
         const inLogo = du * du + dv * dv < logoR * logoR;
 
+        // Orla dorada en el borde inferior de la tela (peso del noren)
+        const isHem = r >= ROWS - 3;
+
         let rC, gC, bC;
-        if (inLogo) { rC = 245*sh; gC = 242*sh; bC = 234*sh; }
-        else        { rC = 22*sh + 14; gC = 42*sh + 16; bC = 92*sh + 18; }
+        if (isHem)      { rC = 82.8*sh + 124.2; gC = 62.4*sh + 93.6;  bC = 37.6*sh + 56.4; }
+        else if (inLogo){ rC = 92.8*sh + 139.2; gC = 74*sh + 111;     bC = 56*sh + 84;    }
+        else            { rC = 98.8*sh + 148.2; gC = 96.4*sh + 144.6; bC = 88.8*sh + 133.2; }
 
         ctx.fillStyle = `rgb(${rC|0},${gC|0},${bC|0})`;
         ctx.beginPath();
