@@ -109,10 +109,10 @@ let cellW, cellH, clothH, stripW, gap, strips = [];
 
 function build() {
   resize();
-  gap = 6;                                       // rendija entre tiras
+  gap = 18;                                      // rendija entre tiras
   stripW = (W - gap * (STRIPS - 1)) / STRIPS;    // noren a pantalla completa
   cellW = stripW / (COLS - 1);
-  clothH = H - rodY;
+  clothH = H * 0.9 - rodY;                       // el noren cubre el 90% del alto, no llega al suelo
   cellH = clothH / (ROWS - 1);
   strips = [];
 
@@ -246,6 +246,12 @@ function relax(a, b, rest) {
 /* ---------- Render ---------- */
 const logoCx = 0.5, logoCy = 0.42, logoR = 0.17; // círculo del "logo" en UV
 
+// Ruido fijo por celda (no depende de t) → textura rugosa estable, sin parpadeo
+function hash(a, b, c) {
+  const v = Math.sin(a * 12.9898 + b * 78.233 + c * 37.719) * 43758.5453;
+  return v - Math.floor(v);
+}
+
 function draw(prog) {
   ctx.clearRect(0, 0, W, H);
   ctx.save();
@@ -296,6 +302,14 @@ function draw(prog) {
         else if (inLogo){ rC = 92.8*sh + 139.2; gC = 74*sh + 111;     bC = 56*sh + 84;    }
         else            { rC = 98.8*sh + 148.2; gC = 96.4*sh + 144.6; bC = 88.8*sh + 133.2; }
 
+        // Superficie rugosa: grano fijo por celda, como el tejido de la tela
+        const grain = (hash(st.sx, r, c) - 0.5) * 16;
+        rC += grain; gC += grain * 0.85; bC += grain * 0.6;
+
+        // Luz: resalte cálido en los pliegues que sobresalen hacia el espectador
+        const specular = Math.max(0, sh - 1) * 70;
+        rC += specular; gC += specular * 0.9; bC += specular * 0.55;
+
         ctx.fillStyle = `rgb(${rC|0},${gC|0},${bC|0})`;
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
@@ -311,6 +325,17 @@ function draw(prog) {
     }
   }
 
+  ctx.restore();
+
+  // Halo de luz ambiental suave, como si entrara luz desde arriba-izquierda
+  const light = ctx.createRadialGradient(W * 0.3, H * 0.02, 0, W * 0.3, H * 0.02, Math.max(W, H) * 0.85);
+  light.addColorStop(0, 'rgba(255,248,230,0.25)');
+  light.addColorStop(0.55, 'rgba(255,248,230,0.08)');
+  light.addColorStop(1, 'rgba(255,248,230,0)');
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighten';
+  ctx.fillStyle = light;
+  ctx.fillRect(0, 0, W, H);
   ctx.restore();
 }
 
