@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noren — intro de entrada con simulación de tela</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; background: #f5f2ea; }
+
+  /* El contenido real de la web va debajo del canvas */
+  #site {
+    min-height: 100vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 14px; padding: 2rem; text-align: center;
+  }
+  #site .logo {
+    width: 64px; height: 64px; border-radius: 50%;
+    background: #28407a; color: #f3efe4;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+  }
+  #site h1 { font-size: 26px; font-weight: 500; margin: 0; color: #222; }
+  #site p { font-size: 15px; color: #666; margin: 0; max-width: 420px; line-height: 1.7; }
+
+  /* El noren: canvas fijo cubriendo toda la ventana, por encima del sitio */
+  #cv {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    display: block; z-index: 10;
+  }
+
+  #enter {
+    position: fixed; left: 50%; top: 58%;
+    transform: translate(-50%, -50%);
+    z-index: 11;
+    font-size: 15px; padding: 12px 32px;
+    background: #f3efe4; color: #26215c;
+    border: 1px solid #b9b2a0; border-radius: 999px;
+    cursor: pointer;
+    transition: opacity .4s;
+  }
+  #enter:hover { background: #fffdf5; }
+  #enter.hidden { opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<!-- Contenido de la web (queda detrás del noren hasta que se abre) -->
+<div id="site">
+  <div class="logo">の</div>
+  <h1>Bienvenido a la tienda</h1>
+  <p>Ya has cruzado el noren. A partir de aquí empieza el sitio normal: hero, navegación, contenido. Aquí encadenarías tus animaciones de entrada (GSAP, etc.).</p>
+</div>
+
+<!-- Capa del intro -->
+<canvas id="cv"></canvas>
+<button id="enter">Entrar</button>
+
+<script>
+/* ============================================================
+   NOREN — intro de entrada con simulación de tela (Verlet 2D)
+   ------------------------------------------------------------
+   Piezas:
+   1. FÍSICA — malla de partículas por tira, integración Verlet,
+      constraints de distancia, viento suave ponderado por altura.
+   2. APERTURA — al pulsar "Entrar", un colisionador circular
+      invisible crece en el centro y proyecta fuera las
+      partículas: las tiras centrales se apartan. El círculo está
+      achatado en vertical (dy * 1.6) para que empuje sobre todo
+      hacia los lados.
+   3. CÁMARA — durante la apertura se escala el dibujo alrededor
+      del centro (translate → scale → translate), simulando un
+      dolly hacia dentro. En 3D esto sería mover la cámara en Z.
+   4. REVELACIÓN — a partir del 55% del progreso el canvas funde
+      su opacidad y al llegar a 1 se oculta, dejando el sitio
+      (que siempre estuvo en el DOM debajo) interactivo.
+   ============================================================ */
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const enterBtn = document.getElementById('enter');
+
+let W = innerWidth, H = innerHeight;
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR;
+  cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+
+/* ---------- Parámetros ---------- */
+const STRIPS = 4;     // tiras del noren
+const COLS   = 7;     // partículas por fila (en cada tira)
+const ROWS   = 16;    // partículas por columna
+const rodY   = 12;    // altura de la barra
+
+// Viento: amplitud pequeña y frecuencias bajas = brisa suave.
+// Sube WIND (p. ej. a 0.3) y las frecuencias para más vendaval.
+const WIND = 0.09;
+const FREQ1 = 0.9, FREQ2 = 0.5;
+
+const DUR = 1900;     // duración de la apertura en ms
+
+let cellW, cellH, clothH, stripW, gap, strips = [];
+
+function build() {
+  resize();
+  gap = 6;                                       // rendija entre tiras
+  stripW = (W - gap * (STRIPS - 1)) / STRIPS;    // noren a pantalla completa
+  cellW = stripW / (COLS - 1);
+  clothH = H - rodY;
+  cellH = clothH / (ROWS - 1);
+  strips = [];
+
+  for (let s = 0; s < STRIPS; s++) {
+    const pts = [];
+    const sx = s * (stripW + gap);
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const x = sx + c * cellW;
+        const y = rodY + r * cellH;
+        pts.push({
+          x, y,          // posición actual
+          px: x, py: y,  // posición anterior (Verlet)
+          rx: x, ry: y,  // posición de reposo (UVs y anclaje)
+          pin: r === 0   // fila superior cosida a la barra
+        });
+      }
+    }
+    strips.push({ pts, sx });
+  }
+}
+
+build();
+window.addEventListener('resize', () => { if (phase === 'idle') build(); });
+
+/* ---------- Estado del intro ---------- */
+let phase = 'idle';   // 'idle' → 'opening' → 'open'
+let openStart = 0;
+let t = 0;
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
+function easeInOut(p) { return p < 0.5 ? 2*p*p : 1 - Math.pow(-2*p + 2, 2) / 2; }
+
+function finishIntro() {
+  phase = 'open';
+  cv.style.display = 'none';
+  enterBtn.classList.add('hidden');
+  // Aquí lanzarías las animaciones de entrada del hero.
+}
+
+enterBtn.addEventListener('click', () => {
+  if (phase !== 'idle') return;
+  if (reducedMotion) { finishIntro(); return; } // accesibilidad: sin animación
+  phase = 'opening';
+  openStart = performance.now();
+  enterBtn.classList.add('hidden');
+});
+
+/* Para saltar el intro en visitas repetidas, descomenta:
+if (sessionStorage.getItem('norenSeen')) finishIntro();
+// ...y dentro de finishIntro():
+// sessionStorage.setItem('norenSeen', '1');
+*/
+
+function idx(r, c) { return r * COLS + c; }
+
+/* ---------- Física ---------- */
+function step(prog) {
+  t += 0.016;
+
+  // Colisionador: crece de 0 a ~media pantalla durante la apertura
+  const cx = W / 2;
+  const cy = rodY + clothH * 0.55;
+  const R = phase === 'opening'
+    ? easeOutCubic(prog) * Math.max(W, H) * 0.52
+    : 0;
+
+  for (const st of strips) {
+    const pts = st.pts;
+
+    // 1) Verlet + fuerzas
+    for (let r = 0; r < ROWS; r++) {
+      const weight = r / (ROWS - 1); // 0 arriba, 1 abajo
+      for (let c = 0; c < COLS; c++) {
+        const p = pts[idx(r, c)];
+        if (p.pin) { p.x = p.rx; p.y = p.ry; continue; }
+
+        // Brisa: dos senos superpuestos, fase según posición de reposo
+        const noise =
+          Math.sin(t * FREQ1 + p.ry * 0.015 + st.sx * 0.01) +
+          0.6 * Math.sin(t * FREQ2 + p.rx * 0.02);
+
+        const ax = noise * WIND * weight;
+        const ay = 0.35; // gravedad ligera
+
+        const vx = (p.x - p.px) * 0.985;
+        const vy = (p.y - p.py) * 0.985;
+        p.px = p.x; p.py = p.y;
+        p.x += vx + ax;
+        p.y += vy + ay;
+      }
+    }
+
+    // 2) Constraints + colisión con el círculo de apertura
+    for (let it = 0; it < 4; it++) {
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const a = pts[idx(r, c)];
+          if (c < COLS - 1) relax(a, pts[idx(r, c + 1)], cellW);
+          if (r < ROWS - 1) relax(a, pts[idx(r + 1, c)], cellH);
+        }
+      }
+      if (R > 0) {
+        for (const p of pts) {
+          if (p.pin) continue;
+          // Elipse: achatamos dy para empujar sobre todo en horizontal
+          const dx = p.x - cx;
+          const dy = (p.y - cy) * 1.6;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < R * R && d2 > 0.01) {
+            const d = Math.sqrt(d2), k = R / d;
+            p.x = cx + dx * k;
+            p.y = cy + (dy * k) / 1.6;
+          }
+        }
+      }
+    }
+  }
+}
+
+function relax(a, b, rest) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const d = Math.sqrt(dx * dx + dy * dy) || 0.001;
+  const diff = (d - rest) / d * 0.5;
+  if (!a.pin) { a.x += dx * diff; a.y += dy * diff; }
+  if (!b.pin) { b.x -= dx * diff; b.y -= dy * diff; }
+}
+
+/* ---------- Render ---------- */
+const logoCx = 0.5, logoCy = 0.42, logoR = 0.17; // círculo del "logo" en UV
+
+function draw(prog) {
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+
+  // "Cámara": zoom hacia el centro durante la apertura
+  if (phase === 'opening') {
+    const s = 1 + easeInOut(prog) * 1.5;
+    const cx = W / 2, cy = rodY + clothH * 0.55;
+    ctx.translate(cx, cy);
+    ctx.scale(s, s);
+    ctx.translate(-cx, -cy);
+  }
+
+  // Barra
+  ctx.strokeStyle = '#7a5c3a';
+  ctx.lineWidth = 7;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-30, rodY - 2);
+  ctx.lineTo(W + 30, rodY - 2);
+  ctx.stroke();
+
+  // Tela
+  for (const st of strips) {
+    const pts = st.pts;
+    for (let r = 0; r < ROWS - 1; r++) {
+      for (let c = 0; c < COLS - 1; c++) {
+        const p1 = pts[idx(r, c)];
+        const p2 = pts[idx(r, c + 1)];
+        const p3 = pts[idx(r + 1, c + 1)];
+        const p4 = pts[idx(r + 1, c)];
+
+        // Sombreado falso por compresión horizontal (pliegues)
+        const sh = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
+
+        // UV en reposo → círculo blanco del logo, deformado con la tela
+        const u = ((p1.rx + p2.rx) / 2) / W;
+        const v = ((p1.ry + p4.ry) / 2 - rodY) / clothH;
+        const du = u - logoCx;
+        const dv = (v - logoCy) * (clothH / W);
+        const inLogo = du * du + dv * dv < logoR * logoR;
+
+        let rC, gC, bC;
+        if (inLogo) { rC = 245*sh; gC = 242*sh; bC = 234*sh; }
+        else        { rC = 22*sh + 14; gC = 42*sh + 16; bC = 92*sh + 18; }
+
+        ctx.fillStyle = `rgb(${rC|0},${gC|0},${bC|0})`;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.lineTo(p3.x, p3.y);
+        ctx.lineTo(p4.x, p4.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = ctx.fillStyle;
+        ctx.lineWidth = 0.6;
+        ctx.stroke();
+      }
+    }
+  }
+
+  ctx.restore();
+}
+
+/* ---------- Bucle ---------- */
+function loop(now) {
+  let prog = 0;
+
+  if (phase === 'opening') {
+    prog = Math.min(1, (now - openStart) / DUR);
+    // Fundido del canvas en la segunda mitad de la apertura
+    cv.style.opacity = prog < 0.55 ? '1' : String(1 - (prog - 0.55) / 0.45);
+    if (prog >= 1) finishIntro();
+  }
+
+  if (phase !== 'open') {
+    step(prog);
+    draw(prog);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+
+</body>
+</html>
