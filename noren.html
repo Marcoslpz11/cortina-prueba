@@ -101,6 +101,7 @@ const rodY   = 12;    // altura de la barra
 // Viento: amplitud pequeña y frecuencias bajas = brisa suave.
 // Sube WIND (p. ej. a 0.3) y las frecuencias para más vendaval.
 const WIND = 0.04;
+const WIND_Y = 0.55; // ondulación vertical, independiente del vaivén lateral
 const FREQ1 = 0.9, FREQ2 = 0.5;
 
 const DUR = 1900;     // duración de la apertura en ms
@@ -211,7 +212,7 @@ function step(prog) {
           0.5 * Math.sin(t * FREQ2 * 1.4 + p.rx * 0.05 + p.ry * 0.02);
 
         const ax = noise * WIND * weight;
-        const ay = 0.35 + noiseY * WIND * weightY * 1.4; // gravedad + ondulación
+        const ay = 0.35 + noiseY * WIND_Y * weightY; // gravedad + ondulación
 
         const vx = (p.x - p.px) * 0.985;
         const vy = (p.y - p.py) * 0.985;
@@ -390,8 +391,8 @@ function draw(prog) {
         // abomban hacia el espectador salgan claramente más claras y los
         // pliegues hacia dentro más oscuros (ya no solo un matiz sutil).
         const shH = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
-        const shV = Math.max(0.7, Math.min(1.3, ((p4.y - p1.y) + (p3.y - p2.y)) / 2 / cellH));
-        const relief = (shH - 1) + (shV - 1) * 0.6;
+        const shV = Math.max(0.4, Math.min(1.6, ((p4.y - p1.y) + (p3.y - p2.y)) / 2 / cellH));
+        const relief = (shH - 1) + (shV - 1) * 1.1;
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
@@ -399,9 +400,9 @@ function draw(prog) {
         ctx.lineTo(p4.x, p4.y);
         ctx.closePath();
         if (relief > 0) {
-          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.28, relief * 0.9)})`;
+          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.42, relief * 1.3)})`;
         } else {
-          ctx.fillStyle = `rgba(90,65,35,${Math.min(0.24, -relief * 0.8)})`;
+          ctx.fillStyle = `rgba(80,58,30,${Math.min(0.38, -relief * 1.2)})`;
         }
         ctx.fill();
       }
