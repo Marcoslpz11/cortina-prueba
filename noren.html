@@ -349,9 +349,17 @@ function draw(prog) {
   ctx.lineTo(W + 30, rodY - 2);
   ctx.stroke();
 
-  // Tela: textura nítida mapeada por triángulos + sombreado dinámico de pliegues
-  for (const st of strips) {
-    const pts = st.pts;
+  // Cada tira se pinta entera (tela + sus costuras + su texto) antes de
+  // pasar a la siguiente, de izquierda a derecha, para que una tira que
+  // el viento adelanta visualmente tape a la anterior en vez de que las
+  // costuras/texto de todas se dibujen encima de todo al final.
+  const SEAM_INSET = 10;
+  const insetT = Math.min(1, SEAM_INSET / cellW);
+
+  for (let s = 0; s < strips.length; s++) {
+    const pts = strips[s].pts;
+
+    // Tela: textura nítida mapeada por triángulos + sombreado dinámico de pliegues
     for (let r = 0; r < ROWS - 1; r++) {
       for (let c = 0; c < COLS - 1; c++) {
         const p1 = pts[idx(r, c)];
@@ -387,39 +395,30 @@ function draw(prog) {
       }
     }
 
-  }
-
-  // Costuras doradas finas junto a cada hueco entre paños: una a ~10px
-  // hacia dentro del paño izquierdo y su pareja simétrica a ~10px hacia
-  // dentro del paño derecho (el hueco en sí no se rellena con nada).
-  const SEAM_INSET = 10;
-  const insetT = Math.min(1, SEAM_INSET / cellW);
-  for (let i = 0; i < strips.length - 1; i++) {
-    const a = strips[i].pts;
-    const b = strips[i + 1].pts;
+    // Costuras doradas finas junto a los huecos con las tiras vecinas,
+    // ~10px hacia dentro de esta misma tira (el hueco no se rellena).
     ctx.strokeStyle = 'rgba(201,154,91,0.5)';
     ctx.lineWidth = 2;
-
-    ctx.beginPath();
-    for (let r = 0; r < ROWS; r++) {
-      const edge = a[idx(r, COLS - 1)], inner = a[idx(r, COLS - 2)];
-      const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
-      if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    if (s < strips.length - 1) {
+      ctx.beginPath();
+      for (let r = 0; r < ROWS; r++) {
+        const edge = pts[idx(r, COLS - 1)], inner = pts[idx(r, COLS - 2)];
+        const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
+        if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
-
-    ctx.beginPath();
-    for (let r = 0; r < ROWS; r++) {
-      const edge = b[idx(r, 0)], inner = b[idx(r, 1)];
-      const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
-      if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    if (s > 0) {
+      ctx.beginPath();
+      for (let r = 0; r < ROWS; r++) {
+        const edge = pts[idx(r, 0)], inner = pts[idx(r, 1)];
+        const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
+        if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
-  }
 
-  // Texto: se pinta al final, por encima de las costuras.
-  for (const st of strips) {
-    const pts = st.pts;
+    // Texto: se pinta al final de esta tira, por encima de sus costuras.
     for (let r = 0; r < ROWS - 1; r++) {
       for (let c = 0; c < COLS - 1; c++) {
         const p1 = pts[idx(r, c)];
