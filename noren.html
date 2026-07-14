@@ -201,8 +201,14 @@ function step(prog) {
           Math.sin(t * FREQ1 + p.ry * 0.015 + st.sx * 0.01) +
           0.6 * Math.sin(t * FREQ2 + p.rx * 0.02);
 
+        // Componente vertical, con fase distinta (según rx) para que el
+        // borde inferior ondule en vez de quedar siempre recto.
+        const noiseY =
+          Math.sin(t * FREQ1 * 0.8 + p.rx * 0.025 + st.sx * 0.02) +
+          0.5 * Math.sin(t * FREQ2 * 1.4 + p.rx * 0.05);
+
         const ax = noise * WIND * weight;
-        const ay = 0.35; // gravedad ligera
+        const ay = 0.35 + noiseY * WIND * weight * 0.7; // gravedad + ondulación
 
         const vx = (p.x - p.px) * 0.985;
         const vy = (p.y - p.py) * 0.985;
