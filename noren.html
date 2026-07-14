@@ -94,8 +94,8 @@ function resize() {
 
 /* ---------- Parámetros ---------- */
 const STRIPS = 4;     // tiras del noren
-const COLS   = 29;    // partículas por fila (en cada tira) — fino para poder "pintar" el texto
-const ROWS   = 34;    // partículas por columna
+const COLS   = 11;    // partículas por fila (en cada tira)
+const ROWS   = 20;    // partículas por columna
 const rodY   = 12;    // altura de la barra
 
 // Viento: amplitud pequeña y frecuencias bajas = brisa suave.
@@ -245,34 +245,66 @@ function relax(a, b, rest) {
 
 /* ---------- Render ---------- */
 
-// Ruido fijo por celda (no depende de t) → textura rugosa estable, sin parpadeo
-function hash(a, b, c) {
-  const v = Math.sin(a * 12.9898 + b * 78.233 + c * 37.719) * 43758.5453;
-  return v - Math.floor(v);
+/* Textura de la tela: base crema + orla dorada + grano + texto, en
+   una resolución alta e independiente de la malla física. Se pinta
+   sobre la tela deformada con una transformación afín por triángulo
+   (2 por celda), así el texto sale nítido sin depender de cuántos
+   puntos tenga la simulación. Al usar la posición de reposo (rx,ry)
+   como coordenada de textura, el dibujo se deforma y se separa con
+   la tela — no es una capa flotante aparte. */
+const TEX_W = 2000, TEX_H = 1000;
+const HEM_FRAC = 0.1; // fracción inferior de la tela ocupada por la orla
+
+const fabricTex = document.createElement('canvas');
+fabricTex.width = TEX_W; fabricTex.height = TEX_H;
+const fx = fabricTex.getContext('2d');
+
+fx.fillStyle = 'rgb(247,241,222)';
+fx.fillRect(0, 0, TEX_W, TEX_H);
+
+// Grano: motas finas para la rugosidad del tejido
+for (let i = 0; i < 30000; i++) {
+  const gx = Math.random() * TEX_W, gy = Math.random() * TEX_H;
+  const dark = Math.random() < 0.5;
+  fx.fillStyle = dark ? 'rgba(70,50,25,0.06)' : 'rgba(255,252,240,0.5)';
+  fx.fillRect(gx, gy, 1.6, 1.6);
 }
 
-/* Texto "pintado" en la tela: se renderiza una vez a una textura en
-   espacio UV (independiente del tamaño de pantalla) y se lee su alfa
-   por posición de reposo (rx, ry) de cada celda. Al estar atado a la
-   posición de reposo, el texto se deforma y se separa con la tela
-   igual que el resto del estampado — no es una capa flotante aparte. */
-const TEX_W = 1000, TEX_H = 600;
-const textCanvas = document.createElement('canvas');
-textCanvas.width = TEX_W; textCanvas.height = TEX_H;
-const textCtx = textCanvas.getContext('2d');
-textCtx.fillStyle = '#fff';
-textCtx.textAlign = 'center';
-textCtx.textBaseline = 'middle';
-textCtx.font = '800 82px "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", "Yu Gothic", sans-serif';
-textCtx.fillText('和の「おもてなし」で、', TEX_W / 2, TEX_H * 0.27);
-textCtx.fillText('旅を彩る。', TEX_W / 2, TEX_H * 0.27 + 96);
-const textData = textCtx.getImageData(0, 0, TEX_W, TEX_H).data;
+// Orla dorada inferior
+const hemY = TEX_H * (1 - HEM_FRAC);
+fx.fillStyle = 'rgb(207,156,94)';
+fx.fillRect(0, hemY, TEX_W, TEX_H - hemY);
 
-function textInk(u, v) {
-  const x = (u * TEX_W) | 0;
-  const y = (v * TEX_H) | 0;
-  if (x < 0 || x >= TEX_W || y < 0 || y >= TEX_H) return 0;
-  return textData[(y * TEX_W + x) * 4 + 3] / 255; // alfa 0..1
+// Texto
+fx.fillStyle = 'rgb(224,163,111)';
+fx.textAlign = 'center';
+fx.textBaseline = 'middle';
+fx.font = '800 150px "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", "Yu Gothic", sans-serif';
+fx.fillText('和の「おもてなし」で、', TEX_W / 2, TEX_H * 0.30);
+fx.fillText('旅を彩る。', TEX_W / 2, TEX_H * 0.30 + 175);
+
+// Mapea un triángulo de la textura fuente a un triángulo de destino
+// mediante una transformación afín (3 pares de puntos → matriz 2x3).
+function drawTriangle(img, sx0, sy0, sx1, sy1, sx2, sy2, dx0, dy0, dx1, dy1, dx2, dy2) {
+  const denom = (sx1 - sx0) * (sy2 - sy0) - (sx2 - sx0) * (sy1 - sy0);
+  if (Math.abs(denom) < 1e-6) return;
+  const a = ((sy2 - sy0) * (dx1 - dx0) - (sy1 - sy0) * (dx2 - dx0)) / denom;
+  const b = ((sy2 - sy0) * (dy1 - dy0) - (sy1 - sy0) * (dy2 - dy0)) / denom;
+  const c = ((sx1 - sx0) * (dx2 - dx0) - (sx2 - sx0) * (dx1 - dx0)) / denom;
+  const d = ((sx1 - sx0) * (dy2 - dy0) - (sx2 - sx0) * (dy1 - dy0)) / denom;
+  const e = dx0 - a * sx0 - c * sy0;
+  const f = dy0 - b * sx0 - d * sy0;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(dx0, dy0);
+  ctx.lineTo(dx1, dy1);
+  ctx.lineTo(dx2, dy2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(a, b, c, d, e, f);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
 }
 
 function draw(prog) {
@@ -297,7 +329,7 @@ function draw(prog) {
   ctx.lineTo(W + 30, rodY - 2);
   ctx.stroke();
 
-  // Tela
+  // Tela: textura nítida mapeada por triángulos + sombreado dinámico de pliegues
   for (const st of strips) {
     const pts = st.pts;
     for (let r = 0; r < ROWS - 1; r++) {
@@ -307,47 +339,30 @@ function draw(prog) {
         const p3 = pts[idx(r + 1, c + 1)];
         const p4 = pts[idx(r + 1, c)];
 
-        // Sombreado falso por compresión horizontal (pliegues)
+        // Coordenadas de textura según la posición de reposo de cada punto
+        const t1x = (p1.rx / W) * TEX_W, t1y = ((p1.ry - rodY) / clothH) * TEX_H;
+        const t2x = (p2.rx / W) * TEX_W, t2y = ((p2.ry - rodY) / clothH) * TEX_H;
+        const t3x = (p3.rx / W) * TEX_W, t3y = ((p3.ry - rodY) / clothH) * TEX_H;
+        const t4x = (p4.rx / W) * TEX_W, t4y = ((p4.ry - rodY) / clothH) * TEX_H;
+
+        drawTriangle(fabricTex, t1x, t1y, t2x, t2y, t4x, t4y, p1.x, p1.y, p2.x, p2.y, p4.x, p4.y);
+        drawTriangle(fabricTex, t2x, t2y, t3x, t3y, t4x, t4y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y);
+
+        // Sombreado dinámico por compresión horizontal (pliegues): resalte
+        // cálido en las crestas que dan a la luz, sombra en los valles.
         const sh = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
-
-        // UV en reposo → posición en la textura de texto, deformada con la tela
-        const u = ((p1.rx + p2.rx) / 2) / W;
-        const v = ((p1.ry + p4.ry) / 2 - rodY) / clothH;
-        const ink = textInk(u, v);
-
-        // Orla dorada en el borde inferior de la tela (peso del noren)
-        const isHem = r >= ROWS - 3;
-
-        let rC, gC, bC;
-        if (isHem) {
-          rC = 82.8*sh + 124.2; gC = 62.4*sh + 93.6; bC = 37.6*sh + 56.4;
-        } else {
-          const baseR = 98.8*sh + 148.2, baseG = 96.4*sh + 144.6, baseB = 88.8*sh + 133.2;
-          const inkR  = 92.8*sh + 139.2, inkG  = 74*sh + 111,     inkB  = 56*sh + 84;
-          rC = baseR + (inkR - baseR) * ink;
-          gC = baseG + (inkG - baseG) * ink;
-          bC = baseB + (inkB - baseB) * ink;
-        }
-
-        // Superficie rugosa: grano fijo por celda, como el tejido de la tela
-        const grain = (hash(st.sx, r, c) - 0.5) * 16;
-        rC += grain; gC += grain * 0.85; bC += grain * 0.6;
-
-        // Luz: resalte cálido en los pliegues que sobresalen hacia el espectador
-        const specular = Math.max(0, sh - 1) * 70;
-        rC += specular; gC += specular * 0.9; bC += specular * 0.55;
-
-        ctx.fillStyle = `rgb(${rC|0},${gC|0},${bC|0})`;
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
         ctx.lineTo(p3.x, p3.y);
         ctx.lineTo(p4.x, p4.y);
         ctx.closePath();
+        if (sh > 1) {
+          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.4, (sh - 1) * 1.6)})`;
+        } else {
+          ctx.fillStyle = `rgba(90,65,35,${Math.min(0.35, (1 - sh) * 1.4)})`;
+        }
         ctx.fill();
-        ctx.strokeStyle = ctx.fillStyle;
-        ctx.lineWidth = 0.6;
-        ctx.stroke();
       }
     }
   }
