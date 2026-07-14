@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Noren — intro de entrada con simulación de tela</title>
+<title>Noren — intro de entrada con simulación de tela (WebGL)</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: sans-serif; background: #dd8a42; }
@@ -58,64 +58,143 @@
 <canvas id="cv"></canvas>
 <button id="enter">Welcome</button>
 
-<script>
+<script type="module">
 /* ============================================================
-   NOREN — intro de entrada con simulación de tela (Verlet 2D)
+   NOREN (WebGL/Three.js) — experimento de reescritura del motor
+   de dibujo, manteniendo la física 2D (Verlet) tal cual.
    ------------------------------------------------------------
-   Piezas:
-   1. FÍSICA — malla de partículas por tira, integración Verlet,
-      constraints de distancia, viento suave ponderado por altura.
-   2. APERTURA — al pulsar "Entrar", un colisionador circular
-      invisible crece en el centro y proyecta fuera las
-      partículas: las tiras centrales se apartan. El círculo está
-      achatado en vertical (dy * 1.6) para que empuje sobre todo
-      hacia los lados.
-   3. CÁMARA — durante la apertura se escala el dibujo alrededor
-      del centro (translate → scale → translate), simulando un
-      dolly hacia dentro. En 3D esto sería mover la cámara en Z.
-   4. REVELACIÓN — a partir del 55% del progreso el canvas funde
-      su opacidad y al llegar a 1 se oculta, dejando el sitio
-      (que siempre estuvo en el DOM debajo) interactivo.
+   Diferencias clave frente a la versión canvas 2D:
+   - El sombreado de los pliegues ya no se pinta a mano por celda:
+     se deriva una pequeña Z (relieve) a partir de la compresión
+     local de la malla, y la GPU interpola la iluminación por
+     píxel entre vértices (Gouraud/Phong) — así con la MISMA malla
+     que en 2D la luz sale suave, sin depender de la resolución.
+   - El texto es una textura UV normal sobre la malla: nítida a
+     cualquier resolución, sin el truco de warp por triángulos.
+   - Coordenadas: se reutiliza el mismo sistema "y hacia abajo" de
+     la física original; solo se invierte el signo al escribir en
+     el buffer de Three.js (mundo Y hacia arriba).
    ============================================================ */
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 
 const cv = document.getElementById('cv');
-const ctx = cv.getContext('2d');
 const enterBtn = document.getElementById('enter');
 
 let W = innerWidth, H = innerHeight;
 const DPR = Math.min(2, window.devicePixelRatio || 1);
 
-function resize() {
-  W = innerWidth; H = innerHeight;
-  cv.width = W * DPR;
-  cv.height = H * DPR;
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+/* ---------- Parámetros (idénticos a la versión 2D) ---------- */
+const STRIPS = 4;
+const COLS   = 11;
+const ROWS   = 20;
+const rodY   = 12;
+
+const WIND = 0.04;
+const WIND_Y = 0.55;
+const FREQ1 = 0.9, FREQ2 = 0.5;
+const FOLD_DEPTH = 40; // profundidad del relieve simulado (Z), en px
+
+const DUR = 1900;
+
+/* ---------- Textura de la tela (misma receta que en 2D) ---------- */
+const TEX_W = 2000, TEX_H = 1000;
+
+const fabricCanvas = document.createElement('canvas');
+fabricCanvas.width = TEX_W; fabricCanvas.height = TEX_H;
+const fx = fabricCanvas.getContext('2d');
+
+fx.fillStyle = 'rgb(247,241,222)';
+fx.fillRect(0, 0, TEX_W, TEX_H);
+
+for (let i = 0; i < 22000; i++) {
+  const gx = Math.random() * TEX_W, gy = Math.random() * TEX_H;
+  const dark = Math.random() < 0.5;
+  fx.fillStyle = dark ? 'rgba(70,50,25,0.03)' : 'rgba(255,252,240,0.22)';
+  fx.fillRect(gx, gy, 1.6, 1.6);
 }
 
-/* ---------- Parámetros ---------- */
-const STRIPS = 4;     // tiras del noren
-const COLS   = 11;    // partículas por fila (en cada tira)
-const ROWS   = 20;    // partículas por columna
-const rodY   = 12;    // altura de la barra
+const HEM_LINE_FRAC = 0.05;
+fx.strokeStyle = 'rgba(201,154,91,0.5)';
+fx.lineWidth = 2.5;
+fx.beginPath();
+fx.moveTo(0, TEX_H * (1 - HEM_LINE_FRAC));
+fx.lineTo(TEX_W, TEX_H * (1 - HEM_LINE_FRAC));
+fx.stroke();
 
-// Viento: amplitud pequeña y frecuencias bajas = brisa suave.
-// Sube WIND (p. ej. a 0.3) y las frecuencias para más vendaval.
-const WIND = 0.04;
-const WIND_Y = 0.55; // ondulación vertical, independiente del vaivén lateral
-const FREQ1 = 0.9, FREQ2 = 0.5;
+const textCanvas = document.createElement('canvas');
+textCanvas.width = TEX_W; textCanvas.height = TEX_H;
+const tx = textCanvas.getContext('2d');
+tx.fillStyle = 'rgb(224,163,111)';
+tx.textAlign = 'center';
+tx.textBaseline = 'middle';
+tx.font = '800 150px "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", "Yu Gothic", sans-serif';
+tx.fillText('和の「おもてなし」で、', TEX_W / 2, TEX_H * 0.30);
+tx.fillText('旅を彩る。', TEX_W / 2, TEX_H * 0.30 + 175);
 
-const DUR = 1900;     // duración de la apertura en ms
+const fabricTexture = new THREE.CanvasTexture(fabricCanvas);
+const textTexture = new THREE.CanvasTexture(textCanvas);
+fabricTexture.colorSpace = THREE.SRGBColorSpace;
+textTexture.colorSpace = THREE.SRGBColorSpace;
+
+/* ---------- Escena Three.js ---------- */
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+renderer.setPixelRatio(DPR);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(0, W, 0, -H, -2000, 2000);
+camera.position.z = 500;
+
+// Three.js r155+ usa unidades de luz físicas: hacen falta valores mucho
+// más altos que en versiones antiguas para un look "sin sombras duras".
+// Blanco puro para no desviar el color de la tela (ya es cálida de por sí).
+scene.add(new THREE.AmbientLight(0xffffff, 3.0));
+const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+sun.position.set(-1.3, 0.6, 0.35); // rasante desde la izquierda, para que el relieve se lea
+scene.add(sun);
+
+// Barra superior
+const rodGeo = new THREE.PlaneGeometry(1, 4);
+const rodMat = new THREE.MeshBasicMaterial({ color: 0x8a7156 });
+const rod = new THREE.Mesh(rodGeo, rodMat);
+scene.add(rod);
+
+function idx(r, c) { return r * COLS + c; }
 
 let cellW, cellH, clothH, stripW, gap, strips = [];
+const seamLines = []; // { line, stripIndex, side: 'right'|'left' }
+
+function disposeStrips() {
+  for (const st of strips) {
+    scene.remove(st.fabricMesh, st.textMesh);
+    st.geometry.dispose();
+    st.fabricMesh.material.dispose?.();
+  }
+  for (const s of seamLines) {
+    scene.remove(s.line);
+    s.line.geometry.dispose();
+  }
+  seamLines.length = 0;
+  strips = [];
+}
 
 function build() {
-  resize();
-  gap = 5;                                       // rendija entre tiras (mínima: la división visual la da la costura, no el hueco)
-  stripW = (W - gap * (STRIPS - 1)) / STRIPS;    // noren a pantalla completa
+  W = innerWidth; H = innerHeight;
+  renderer.setSize(W, H, false);
+  camera.right = W;
+  camera.bottom = -H;
+  camera.updateProjectionMatrix();
+
+  disposeStrips();
+
+  gap = 5;
+  stripW = (W - gap * (STRIPS - 1)) / STRIPS;
   cellW = stripW / (COLS - 1);
-  clothH = H * 0.9 - rodY;                       // el noren cubre el 90% del alto, no llega al suelo
+  clothH = H * 0.9 - rodY;
   cellH = clothH / (ROWS - 1);
-  strips = [];
+
+  rod.scale.set(W + 60, 1, 1);
+  rod.position.set(W / 2, -(rodY - 2), 1);
 
   for (let s = 0; s < STRIPS; s++) {
     const pts = [];
@@ -125,14 +204,73 @@ function build() {
         const x = sx + c * cellW;
         const y = rodY + r * cellH;
         pts.push({
-          x, y,          // posición actual
-          px: x, py: y,  // posición anterior (Verlet)
-          rx: x, ry: y,  // posición de reposo (UVs y anclaje)
-          pin: r === 0   // fila superior cosida a la barra
+          x, y, z: 0,
+          px: x, py: y,
+          rx: x, ry: y,
+          pin: r === 0
         });
       }
     }
-    strips.push({ pts, sx });
+
+    // Geometría compartida por la malla de tela y la de texto
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(COLS * ROWS * 3);
+    const uvs = new Float32Array(COLS * ROWS * 2);
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const p = pts[idx(r, c)];
+        const i3 = idx(r, c) * 3, i2 = idx(r, c) * 2;
+        positions[i3] = p.x; positions[i3 + 1] = -p.y; positions[i3 + 2] = 0;
+        uvs[i2] = p.rx / W; uvs[i2 + 1] = 1 - (p.ry - rodY) / clothH;
+      }
+    }
+    const indices = [];
+    for (let r = 0; r < ROWS - 1; r++) {
+      for (let c = 0; c < COLS - 1; c++) {
+        const a = idx(r, c), b = idx(r, c + 1), cc = idx(r + 1, c + 1), d = idx(r + 1, c);
+        indices.push(a, b, d, b, cc, d);
+      }
+    }
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    // Sin test/escritura de profundidad real: el orden visual entre tiras
+    // lo decide el orden de dibujo (como en la v2D), no la Z (que aquí solo
+    // se usa para el relieve de los pliegues, no para saber qué paño tapa
+    // a cuál cuando el viento los solapa en pantalla).
+    // transparent:true (aunque sea opaca) para que entre en el mismo grupo
+    // de dibujo que el texto y las costuras: si no, Three.js pintaría
+    // siempre primero TODA la tela "opaca" de las 4 tiras y luego todo lo
+    // "transparente" encima, ignorando el renderOrder entre tiras distintas.
+    const fabricMat = new THREE.MeshStandardMaterial({ map: fabricTexture, roughness: 0.9, metalness: 0, side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: true });
+    const fabricMesh = new THREE.Mesh(geometry, fabricMat);
+    fabricMesh.renderOrder = s * 10;
+    scene.add(fabricMesh);
+
+    const textMat = new THREE.MeshBasicMaterial({ map: textTexture, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+    const textMesh = new THREE.Mesh(geometry, textMat);
+    textMesh.renderOrder = s * 10 + 2;
+    scene.add(textMesh);
+
+    strips.push({ pts, sx, geometry, fabricMesh, textMesh });
+  }
+
+  // Costuras: 2 líneas por hueco interno, actualizadas cada frame.
+  // Cada costura pertenece a la tira dueña de sus propios puntos (igual
+  // que en la v2D), y se dibuja justo después de la tela de esa tira.
+  for (let i = 0; i < strips.length - 1; i++) {
+    for (const side of ['right', 'left']) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ROWS * 3), 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0xc99a5b, transparent: true, opacity: 0.5, depthTest: false, depthWrite: false });
+      const line = new THREE.Line(geo, mat);
+      const stripIndex = side === 'right' ? i : i + 1;
+      line.renderOrder = stripIndex * 10 + 1;
+      scene.add(line);
+      seamLines.push({ line, stripIndex, side });
+    }
   }
 }
 
@@ -140,47 +278,33 @@ build();
 window.addEventListener('resize', () => { if (phase === 'idle') build(); });
 
 /* ---------- Estado del intro ---------- */
-let phase = 'idle';   // 'idle' → 'opening' → 'open'
+let phase = 'idle';
 let openStart = 0;
 let t = 0;
-
-// Asienta la tela en su forma de reposo antes de pintar el primer
-// frame, para que no "bote" de golpe al cargar la página.
-for (let i = 0; i < 90; i++) step(0);
 
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function easeOutCubic(p) { return 1 - Math.pow(1 - p, 3); }
-function easeInOut(p) { return p < 0.5 ? 2*p*p : 1 - Math.pow(-2*p + 2, 2) / 2; }
+function easeInOut(p) { return p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; }
 
 function finishIntro() {
   phase = 'open';
   cv.style.display = 'none';
   enterBtn.classList.add('hidden');
-  // Aquí lanzarías las animaciones de entrada del hero.
 }
 
 enterBtn.addEventListener('click', () => {
   if (phase !== 'idle') return;
-  if (reducedMotion) { finishIntro(); return; } // accesibilidad: sin animación
+  if (reducedMotion) { finishIntro(); return; }
   phase = 'opening';
   openStart = performance.now();
   enterBtn.classList.add('hidden');
 });
 
-/* Para saltar el intro en visitas repetidas, descomenta:
-if (sessionStorage.getItem('norenSeen')) finishIntro();
-// ...y dentro de finishIntro():
-// sessionStorage.setItem('norenSeen', '1');
-*/
-
-function idx(r, c) { return r * COLS + c; }
-
-/* ---------- Física ---------- */
+/* ---------- Física (idéntica a la v2D) ---------- */
 function step(prog) {
   t += 0.016;
 
-  // Colisionador: crece de 0 a ~media pantalla durante la apertura
   const cx = W / 2;
   const cy = rodY + clothH * 0.55;
   const R = phase === 'opening'
@@ -190,29 +314,23 @@ function step(prog) {
   for (const st of strips) {
     const pts = st.pts;
 
-    // 1) Verlet + fuerzas
     for (let r = 0; r < ROWS; r++) {
-      const weight = r / (ROWS - 1); // 0 arriba, 1 abajo
-      // Curva más rápida para el vaivén vertical: así se nota ya a media
-      // altura, no solo acumulado hacia el borde de abajo.
+      const weight = r / (ROWS - 1);
       const weightY = Math.sqrt(weight);
       for (let c = 0; c < COLS; c++) {
         const p = pts[idx(r, c)];
         if (p.pin) { p.x = p.rx; p.y = p.ry; continue; }
 
-        // Brisa: dos senos superpuestos, fase según posición de reposo
         const noise =
           Math.sin(t * FREQ1 + p.ry * 0.015 + st.sx * 0.01) +
           0.6 * Math.sin(t * FREQ2 + p.rx * 0.02);
 
-        // Componente vertical, con fase según rx Y ry, para que se formen
-        // olas visibles a distintas alturas y no solo en el borde inferior.
         const noiseY =
           Math.sin(t * FREQ1 * 0.8 + p.rx * 0.025 + p.ry * 0.012 + st.sx * 0.02) +
           0.5 * Math.sin(t * FREQ2 * 1.4 + p.rx * 0.05 + p.ry * 0.02);
 
         const ax = noise * WIND * weight;
-        const ay = 0.35 + noiseY * WIND_Y * weightY; // gravedad + ondulación
+        const ay = 0.35 + noiseY * WIND_Y * weightY;
 
         const vx = (p.x - p.px) * 0.985;
         const vy = (p.y - p.py) * 0.985;
@@ -222,7 +340,6 @@ function step(prog) {
       }
     }
 
-    // 2) Constraints + colisión con el círculo de apertura
     for (let it = 0; it < 4; it++) {
       for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS; c++) {
@@ -234,7 +351,6 @@ function step(prog) {
       if (R > 0) {
         for (const p of pts) {
           if (p.pin) continue;
-          // Elipse: achatamos dy para empujar sobre todo en horizontal
           const dx = p.x - cx;
           const dy = (p.y - cy) * 1.6;
           const d2 = dx * dx + dy * dy;
@@ -244,6 +360,23 @@ function step(prog) {
             p.y = cy + (dy * k) / 1.6;
           }
         }
+      }
+    }
+
+    // Relieve simulado (Z): a partir de la compresión local de la malla,
+    // para que la GPU pueda iluminarlo con normales suaves de verdad.
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const p = pts[idx(r, c)];
+        let shH = 1, shV = 1;
+        if (c > 0 && c < COLS - 1) {
+          shH = (pts[idx(r, c + 1)].x - pts[idx(r, c - 1)].x) / (2 * cellW);
+        }
+        if (r > 0 && r < ROWS - 1) {
+          shV = (pts[idx(r + 1, c)].y - pts[idx(r - 1, c)].y) / (2 * cellH);
+        }
+        const relief = (shH - 1) + (shV - 1) * 0.6;
+        p.z = Math.max(-1, Math.min(1, relief)) * FOLD_DEPTH;
       }
     }
   }
@@ -257,211 +390,41 @@ function relax(a, b, rest) {
   if (!b.pin) { b.x -= dx * diff; b.y -= dy * diff; }
 }
 
-/* ---------- Render ---------- */
+// Asienta la tela en su forma de reposo antes del primer frame
+for (let i = 0; i < 90; i++) step(0);
 
-/* Dos texturas en resolución alta e independiente de la malla física,
-   pintadas sobre la tela deformada con una transformación afín por
-   triángulo (2 por celda): la base de la tela (crema + grano + orla)
-   y el texto por separado, para poder dibujar el texto por encima de
-   las costuras. Al usar la posición de reposo (rx,ry) como coordenada
-   de textura, ambas se deforman y se separan con la tela — no son
-   capas flotantes aparte. */
-const TEX_W = 2000, TEX_H = 1000;
+/* ---------- Volcado a GPU ---------- */
+const SEAM_INSET = 10;
 
-const fabricTex = document.createElement('canvas');
-fabricTex.width = TEX_W; fabricTex.height = TEX_H;
-const fx = fabricTex.getContext('2d');
-
-fx.fillStyle = 'rgb(247,241,222)';
-fx.fillRect(0, 0, TEX_W, TEX_H);
-
-// Grano: motas muy finas y sutiles para la rugosidad del tejido
-for (let i = 0; i < 22000; i++) {
-  const gx = Math.random() * TEX_W, gy = Math.random() * TEX_H;
-  const dark = Math.random() < 0.5;
-  fx.fillStyle = dark ? 'rgba(70,50,25,0.03)' : 'rgba(255,252,240,0.22)';
-  fx.fillRect(gx, gy, 1.6, 1.6);
-}
-
-// Bordado inferior: una única línea fina de hilo dorado cerca del
-// borde de abajo (no una banda rellena), como la costura vertical
-// entre paños. Al estar en la textura ondula con la caída de la tela.
-const HEM_LINE_FRAC = 0.05;
-fx.strokeStyle = 'rgba(201,154,91,0.5)';
-fx.lineWidth = 2.5;
-fx.beginPath();
-fx.moveTo(0, TEX_H * (1 - HEM_LINE_FRAC));
-fx.lineTo(TEX_W, TEX_H * (1 - HEM_LINE_FRAC));
-fx.stroke();
-
-// Texto: en su propia textura (transparente alrededor) para poder
-// pintarlo por encima de las costuras.
-const textTex = document.createElement('canvas');
-textTex.width = TEX_W; textTex.height = TEX_H;
-const tx = textTex.getContext('2d');
-tx.fillStyle = 'rgb(224,163,111)';
-tx.textAlign = 'center';
-tx.textBaseline = 'middle';
-tx.font = '800 150px "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", "Yu Gothic", sans-serif';
-tx.fillText('和の「おもてなし」で、', TEX_W / 2, TEX_H * 0.30);
-tx.fillText('旅を彩る。', TEX_W / 2, TEX_H * 0.30 + 175);
-
-// Mapea un triángulo de la textura fuente a un triángulo de destino
-// mediante una transformación afín (3 pares de puntos → matriz 2x3).
-function drawTriangle(img, sx0, sy0, sx1, sy1, sx2, sy2, dx0, dy0, dx1, dy1, dx2, dy2) {
-  const denom = (sx1 - sx0) * (sy2 - sy0) - (sx2 - sx0) * (sy1 - sy0);
-  if (Math.abs(denom) < 1e-6) return;
-  const a = ((sy2 - sy0) * (dx1 - dx0) - (sy1 - sy0) * (dx2 - dx0)) / denom;
-  const b = ((sy2 - sy0) * (dy1 - dy0) - (sy1 - sy0) * (dy2 - dy0)) / denom;
-  const c = ((sx1 - sx0) * (dx2 - dx0) - (sx2 - sx0) * (dx1 - dx0)) / denom;
-  const d = ((sx1 - sx0) * (dy2 - dy0) - (sx2 - sx0) * (dy1 - dy0)) / denom;
-  const e = dx0 - a * sx0 - c * sy0;
-  const f = dy0 - b * sx0 - d * sy0;
-
-  // El área de recorte se expande un poco desde el centroide (la
-  // transformación de textura usa los vértices originales, sin tocar)
-  // para que los dos triángulos de cada celda se solapen ligeramente
-  // y no quede una costura visible en la diagonal entre ellos.
-  const cx = (dx0 + dx1 + dx2) / 3, cy = (dy0 + dy1 + dy2) / 3;
-  const S = 1.03;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(cx + (dx0 - cx) * S, cy + (dy0 - cy) * S);
-  ctx.lineTo(cx + (dx1 - cx) * S, cy + (dy1 - cy) * S);
-  ctx.lineTo(cx + (dx2 - cx) * S, cy + (dy2 - cy) * S);
-  ctx.closePath();
-  ctx.clip();
-  ctx.transform(a, b, c, d, e, f);
-  ctx.drawImage(img, 0, 0);
-  ctx.restore();
-}
-
-function draw(prog) {
-  ctx.clearRect(0, 0, W, H);
-  ctx.save();
-
-  // "Cámara": zoom hacia el centro durante la apertura
-  if (phase === 'opening') {
-    const s = 1 + easeInOut(prog) * 1.5;
-    const cx = W / 2, cy = rodY + clothH * 0.55;
-    ctx.translate(cx, cy);
-    ctx.scale(s, s);
-    ctx.translate(-cx, -cy);
-  }
-
-  // Barra
-  ctx.strokeStyle = '#8a7156';
-  ctx.lineWidth = 4;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-30, rodY - 2);
-  ctx.lineTo(W + 30, rodY - 2);
-  ctx.stroke();
-
-  // Cada tira se pinta entera (tela + sus costuras + su texto) antes de
-  // pasar a la siguiente, de izquierda a derecha, para que una tira que
-  // el viento adelanta visualmente tape a la anterior en vez de que las
-  // costuras/texto de todas se dibujen encima de todo al final.
-  const SEAM_INSET = 10;
+function syncMeshes() {
   const insetT = Math.min(1, SEAM_INSET / cellW);
 
-  for (let s = 0; s < strips.length; s++) {
-    const pts = strips[s].pts;
-
-    // Tela: textura nítida mapeada por triángulos + sombreado dinámico de pliegues
-    for (let r = 0; r < ROWS - 1; r++) {
-      for (let c = 0; c < COLS - 1; c++) {
-        const p1 = pts[idx(r, c)];
-        const p2 = pts[idx(r, c + 1)];
-        const p3 = pts[idx(r + 1, c + 1)];
-        const p4 = pts[idx(r + 1, c)];
-
-        // Coordenadas de textura según la posición de reposo de cada punto
-        const t1x = (p1.rx / W) * TEX_W, t1y = ((p1.ry - rodY) / clothH) * TEX_H;
-        const t2x = (p2.rx / W) * TEX_W, t2y = ((p2.ry - rodY) / clothH) * TEX_H;
-        const t3x = (p3.rx / W) * TEX_W, t3y = ((p3.ry - rodY) / clothH) * TEX_H;
-        const t4x = (p4.rx / W) * TEX_W, t4y = ((p4.ry - rodY) / clothH) * TEX_H;
-
-        drawTriangle(fabricTex, t1x, t1y, t2x, t2y, t4x, t4y, p1.x, p1.y, p2.x, p2.y, p4.x, p4.y);
-        drawTriangle(fabricTex, t2x, t2y, t3x, t3y, t4x, t4y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y);
-
-        // Sombreado dinámico por relieve del pliegue: compresión/expansión
-        // horizontal Y vertical combinadas, para que las zonas que se
-        // abomban hacia el espectador salgan claramente más claras y los
-        // pliegues hacia dentro más oscuros (ya no solo un matiz sutil).
-        const shH = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
-        const shV = Math.max(0.4, Math.min(1.6, ((p4.y - p1.y) + (p3.y - p2.y)) / 2 / cellH));
-        const relief = (shH - 1) + (shV - 1) * 1.1;
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.lineTo(p3.x, p3.y);
-        ctx.lineTo(p4.x, p4.y);
-        ctx.closePath();
-        if (relief > 0) {
-          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.42, relief * 1.3)})`;
-        } else {
-          ctx.fillStyle = `rgba(80,58,30,${Math.min(0.38, -relief * 1.2)})`;
-        }
-        ctx.fill();
+  for (const st of strips) {
+    const pos = st.geometry.attributes.position;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const p = st.pts[idx(r, c)];
+        const i = idx(r, c);
+        pos.setXYZ(i, p.x, -p.y, p.z);
       }
     }
-
-    // Costuras doradas finas junto a los huecos con las tiras vecinas,
-    // ~10px hacia dentro de esta misma tira (el hueco no se rellena).
-    ctx.strokeStyle = 'rgba(201,154,91,0.5)';
-    ctx.lineWidth = 2;
-    if (s < strips.length - 1) {
-      ctx.beginPath();
-      for (let r = 0; r < ROWS; r++) {
-        const edge = pts[idx(r, COLS - 1)], inner = pts[idx(r, COLS - 2)];
-        const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
-        if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
-    if (s > 0) {
-      ctx.beginPath();
-      for (let r = 0; r < ROWS; r++) {
-        const edge = pts[idx(r, 0)], inner = pts[idx(r, 1)];
-        const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
-        if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
-
-    // Texto: se pinta al final de esta tira, por encima de sus costuras.
-    for (let r = 0; r < ROWS - 1; r++) {
-      for (let c = 0; c < COLS - 1; c++) {
-        const p1 = pts[idx(r, c)];
-        const p2 = pts[idx(r, c + 1)];
-        const p3 = pts[idx(r + 1, c + 1)];
-        const p4 = pts[idx(r + 1, c)];
-
-        const t1x = (p1.rx / W) * TEX_W, t1y = ((p1.ry - rodY) / clothH) * TEX_H;
-        const t2x = (p2.rx / W) * TEX_W, t2y = ((p2.ry - rodY) / clothH) * TEX_H;
-        const t3x = (p3.rx / W) * TEX_W, t3y = ((p3.ry - rodY) / clothH) * TEX_H;
-        const t4x = (p4.rx / W) * TEX_W, t4y = ((p4.ry - rodY) / clothH) * TEX_H;
-
-        drawTriangle(textTex, t1x, t1y, t2x, t2y, t4x, t4y, p1.x, p1.y, p2.x, p2.y, p4.x, p4.y);
-        drawTriangle(textTex, t2x, t2y, t3x, t3y, t4x, t4y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y);
-      }
-    }
+    pos.needsUpdate = true;
+    st.geometry.computeVertexNormals();
   }
 
-  ctx.restore();
-
-  // Halo de luz ambiental suave, como si entrara luz desde arriba-izquierda
-  const light = ctx.createRadialGradient(W * 0.3, H * 0.02, 0, W * 0.3, H * 0.02, Math.max(W, H) * 0.85);
-  light.addColorStop(0, 'rgba(255,248,230,0.25)');
-  light.addColorStop(0.55, 'rgba(255,248,230,0.08)');
-  light.addColorStop(1, 'rgba(255,248,230,0)');
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighten';
-  ctx.fillStyle = light;
-  ctx.fillRect(0, 0, W, H);
-  ctx.restore();
+  for (const { line, stripIndex, side } of seamLines) {
+    const pts = strips[stripIndex].pts;
+    const pos = line.geometry.attributes.position;
+    for (let r = 0; r < ROWS; r++) {
+      const edge = side === 'right' ? pts[idx(r, COLS - 1)] : pts[idx(r, 0)];
+      const inner = side === 'right' ? pts[idx(r, COLS - 2)] : pts[idx(r, 1)];
+      const x = edge.x + (inner.x - edge.x) * insetT;
+      const y = edge.y + (inner.y - edge.y) * insetT;
+      const z = edge.z + (inner.z - edge.z) * insetT;
+      pos.setXYZ(r, x, -y, z + 0.5);
+    }
+    pos.needsUpdate = true;
+  }
 }
 
 /* ---------- Bucle ---------- */
@@ -470,14 +433,23 @@ function loop(now) {
 
   if (phase === 'opening') {
     prog = Math.min(1, (now - openStart) / DUR);
-    // Fundido del canvas en la segunda mitad de la apertura
     cv.style.opacity = prog < 0.55 ? '1' : String(1 - (prog - 0.55) / 0.45);
     if (prog >= 1) finishIntro();
   }
 
   if (phase !== 'open') {
     step(prog);
-    draw(prog);
+    syncMeshes();
+
+    // "Cámara": zoom ortográfico hacia el punto de apertura
+    const cx = W / 2, cyWorld = -(rodY + clothH * 0.55);
+    const s = phase === 'opening' ? 1 + easeInOut(prog) * 1.5 : 1;
+    const halfW = (W / 2) / s, halfH = (H / 2) / s;
+    camera.left = cx - halfW; camera.right = cx + halfW;
+    camera.top = cyWorld + halfH; camera.bottom = cyWorld - halfH;
+    camera.updateProjectionMatrix();
+
+    renderer.render(scene, camera);
   }
   requestAnimationFrame(loop);
 }
