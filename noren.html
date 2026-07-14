@@ -6,7 +6,7 @@
 <title>Noren — intro de entrada con simulación de tela</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: sans-serif; background: #f5f2ea; }
+  body { margin: 0; font-family: sans-serif; background: #dd8a42; }
 
   /* El contenido real de la web va debajo del canvas */
   #site {
@@ -109,7 +109,7 @@ let cellW, cellH, clothH, stripW, gap, strips = [];
 
 function build() {
   resize();
-  gap = 7;                                       // rendija entre tiras
+  gap = 2;                                       // rendija entre tiras (mínima: la división visual la da la costura, no el hueco)
   stripW = (W - gap * (STRIPS - 1)) / STRIPS;    // noren a pantalla completa
   cellW = stripW / (COLS - 1);
   clothH = H * 0.9 - rodY;                       // el noren cubre el 90% del alto, no llega al suelo
@@ -273,6 +273,22 @@ for (let i = 0; i < 22000; i++) {
   fx.fillRect(gx, gy, 1.6, 1.6);
 }
 
+// Bordado: rejilla de rombos bordados en hilo fino, como en la tela
+// de referencia — dos juegos de líneas diagonales muy sutiles.
+fx.strokeStyle = 'rgba(196,140,88,0.16)';
+fx.lineWidth = 1.4;
+const STITCH = 46;
+fx.beginPath();
+for (let x = -TEX_H; x < TEX_W + TEX_H; x += STITCH) {
+  fx.moveTo(x, 0);
+  fx.lineTo(x + TEX_H, TEX_H);
+}
+for (let x = 0; x < TEX_W + TEX_H; x += STITCH) {
+  fx.moveTo(x, 0);
+  fx.lineTo(x - TEX_H, TEX_H);
+}
+fx.stroke();
+
 // Texto
 fx.fillStyle = 'rgb(224,163,111)';
 fx.textAlign = 'center';
@@ -365,11 +381,27 @@ function draw(prog) {
       }
     }
 
-    // Costura dorada fina en el borde derecho de la tira (línea entre paños)
-    if (st !== strips[strips.length - 1]) {
+  }
+
+  // Entre paños: en reposo, el viento separa más los bordes hacia abajo
+  // y se vería el fondo de la página por la rendija. Se rellena con el
+  // mismo crema de la tela y se traza encima el hilo dorado — así la
+  // división se lee como una costura, no como un hueco. Durante la
+  // apertura se omite para que las tiras se separen de verdad.
+  if (phase !== 'opening') {
+    for (let i = 0; i < strips.length - 1; i++) {
+      const a = strips[i].pts, b = strips[i + 1].pts;
+      ctx.beginPath();
+      ctx.moveTo(a[idx(0, COLS - 1)].x, a[idx(0, COLS - 1)].y);
+      for (let r = 1; r < ROWS; r++) ctx.lineTo(a[idx(r, COLS - 1)].x, a[idx(r, COLS - 1)].y);
+      for (let r = ROWS - 1; r >= 0; r--) ctx.lineTo(b[idx(r, 0)].x, b[idx(r, 0)].y);
+      ctx.closePath();
+      ctx.fillStyle = 'rgb(247,241,222)';
+      ctx.fill();
+
       ctx.beginPath();
       for (let r = 0; r < ROWS; r++) {
-        const p = pts[idx(r, COLS - 1)];
+        const p = a[idx(r, COLS - 1)];
         if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
       }
       ctx.strokeStyle = 'rgba(201,154,91,0.55)';
