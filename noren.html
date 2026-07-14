@@ -192,6 +192,9 @@ function step(prog) {
     // 1) Verlet + fuerzas
     for (let r = 0; r < ROWS; r++) {
       const weight = r / (ROWS - 1); // 0 arriba, 1 abajo
+      // Curva más rápida para el vaivén vertical: así se nota ya a media
+      // altura, no solo acumulado hacia el borde de abajo.
+      const weightY = Math.sqrt(weight);
       for (let c = 0; c < COLS; c++) {
         const p = pts[idx(r, c)];
         if (p.pin) { p.x = p.rx; p.y = p.ry; continue; }
@@ -201,14 +204,14 @@ function step(prog) {
           Math.sin(t * FREQ1 + p.ry * 0.015 + st.sx * 0.01) +
           0.6 * Math.sin(t * FREQ2 + p.rx * 0.02);
 
-        // Componente vertical, con fase distinta (según rx) para que el
-        // borde inferior ondule en vez de quedar siempre recto.
+        // Componente vertical, con fase según rx Y ry, para que se formen
+        // olas visibles a distintas alturas y no solo en el borde inferior.
         const noiseY =
-          Math.sin(t * FREQ1 * 0.8 + p.rx * 0.025 + st.sx * 0.02) +
-          0.5 * Math.sin(t * FREQ2 * 1.4 + p.rx * 0.05);
+          Math.sin(t * FREQ1 * 0.8 + p.rx * 0.025 + p.ry * 0.012 + st.sx * 0.02) +
+          0.5 * Math.sin(t * FREQ2 * 1.4 + p.rx * 0.05 + p.ry * 0.02);
 
         const ax = noise * WIND * weight;
-        const ay = 0.35 + noiseY * WIND * weight * 1.4; // gravedad + ondulación
+        const ay = 0.35 + noiseY * WIND * weightY * 1.4; // gravedad + ondulación
 
         const vx = (p.x - p.px) * 0.985;
         const vy = (p.y - p.py) * 0.985;
@@ -382,20 +385,23 @@ function draw(prog) {
         drawTriangle(fabricTex, t1x, t1y, t2x, t2y, t4x, t4y, p1.x, p1.y, p2.x, p2.y, p4.x, p4.y);
         drawTriangle(fabricTex, t2x, t2y, t3x, t3y, t4x, t4y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y);
 
-        // Sombreado dinámico por compresión horizontal (pliegues): resalte
-        // cálido en las crestas que dan a la luz, sombra en los valles.
-        // Sutil a propósito, para no romper la lectura del texto.
-        const sh = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
+        // Sombreado dinámico por relieve del pliegue: compresión/expansión
+        // horizontal Y vertical combinadas, para que las zonas que se
+        // abomban hacia el espectador salgan claramente más claras y los
+        // pliegues hacia dentro más oscuros (ya no solo un matiz sutil).
+        const shH = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
+        const shV = Math.max(0.7, Math.min(1.3, ((p4.y - p1.y) + (p3.y - p2.y)) / 2 / cellH));
+        const relief = (shH - 1) + (shV - 1) * 0.6;
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
         ctx.lineTo(p3.x, p3.y);
         ctx.lineTo(p4.x, p4.y);
         ctx.closePath();
-        if (sh > 1) {
-          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.14, (sh - 1) * 0.5)})`;
+        if (relief > 0) {
+          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.28, relief * 0.9)})`;
         } else {
-          ctx.fillStyle = `rgba(90,65,35,${Math.min(0.12, (1 - sh) * 0.45)})`;
+          ctx.fillStyle = `rgba(90,65,35,${Math.min(0.24, -relief * 0.8)})`;
         }
         ctx.fill();
       }
