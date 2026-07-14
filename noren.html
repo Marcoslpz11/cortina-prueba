@@ -109,7 +109,7 @@ let cellW, cellH, clothH, stripW, gap, strips = [];
 
 function build() {
   resize();
-  gap = 2;                                       // rendija entre tiras (mínima: la división visual la da la costura, no el hueco)
+  gap = 5;                                       // rendija entre tiras (mínima: la división visual la da la costura, no el hueco)
   stripW = (W - gap * (STRIPS - 1)) / STRIPS;    // noren a pantalla completa
   cellW = stripW / (COLS - 1);
   clothH = H * 0.9 - rodY;                       // el noren cubre el 90% del alto, no llega al suelo
@@ -208,7 +208,7 @@ function step(prog) {
           0.5 * Math.sin(t * FREQ2 * 1.4 + p.rx * 0.05);
 
         const ax = noise * WIND * weight;
-        const ay = 0.35 + noiseY * WIND * weight * 0.7; // gravedad + ondulación
+        const ay = 0.35 + noiseY * WIND * weight * 1.4; // gravedad + ondulación
 
         const vx = (p.x - p.px) * 0.985;
         const vy = (p.y - p.py) * 0.985;
