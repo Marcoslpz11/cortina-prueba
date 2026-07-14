@@ -6,7 +6,7 @@
 <title>Noren — intro de entrada con simulación de tela</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: sans-serif; background: #f4f1ea; }
+  body { margin: 0; font-family: sans-serif; background: #dd8a42; }
 
   /* El contenido real de la web va debajo del canvas */
   #site {
@@ -273,13 +273,16 @@ for (let i = 0; i < 22000; i++) {
   fx.fillRect(gx, gy, 1.6, 1.6);
 }
 
-// Orla inferior: banda de tono tostado más suave que la tela base.
-// Al estar en la textura, su borde superior ondula con la caída de
-// la tela igual que el resto del estampado.
-const HEM_FRAC = 0.13;
-const hemY = TEX_H * (1 - HEM_FRAC);
-fx.fillStyle = 'rgb(228,190,138)';
-fx.fillRect(0, hemY, TEX_W, TEX_H - hemY);
+// Bordado inferior: una única línea fina de hilo dorado cerca del
+// borde de abajo (no una banda rellena), como la costura vertical
+// entre paños. Al estar en la textura ondula con la caída de la tela.
+const HEM_LINE_FRAC = 0.13;
+fx.strokeStyle = 'rgb(201,154,91)';
+fx.lineWidth = 2.5;
+fx.beginPath();
+fx.moveTo(0, TEX_H * (1 - HEM_LINE_FRAC));
+fx.lineTo(TEX_W, TEX_H * (1 - HEM_LINE_FRAC));
+fx.stroke();
 
 // Texto
 fx.fillStyle = 'rgb(224,163,111)';
@@ -301,11 +304,18 @@ function drawTriangle(img, sx0, sy0, sx1, sy1, sx2, sy2, dx0, dy0, dx1, dy1, dx2
   const e = dx0 - a * sx0 - c * sy0;
   const f = dy0 - b * sx0 - d * sy0;
 
+  // El área de recorte se expande un poco desde el centroide (la
+  // transformación de textura usa los vértices originales, sin tocar)
+  // para que los dos triángulos de cada celda se solapen ligeramente
+  // y no quede una costura visible en la diagonal entre ellos.
+  const cx = (dx0 + dx1 + dx2) / 3, cy = (dy0 + dy1 + dy2) / 3;
+  const S = 1.03;
+
   ctx.save();
   ctx.beginPath();
-  ctx.moveTo(dx0, dy0);
-  ctx.lineTo(dx1, dy1);
-  ctx.lineTo(dx2, dy2);
+  ctx.moveTo(cx + (dx0 - cx) * S, cy + (dy0 - cy) * S);
+  ctx.lineTo(cx + (dx1 - cx) * S, cy + (dy1 - cy) * S);
+  ctx.lineTo(cx + (dx2 - cx) * S, cy + (dy2 - cy) * S);
   ctx.closePath();
   ctx.clip();
   ctx.transform(a, b, c, d, e, f);
