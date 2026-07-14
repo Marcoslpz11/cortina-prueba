@@ -249,13 +249,13 @@ function relax(a, b, rest) {
 
 /* ---------- Render ---------- */
 
-/* Textura de la tela: base crema + grano + texto, en una resolución
-   alta e independiente de la malla física. Se pinta sobre la tela
-   deformada con una transformación afín por triángulo (2 por celda),
-   así el texto sale nítido sin depender de cuántos puntos tenga la
-   simulación. Al usar la posición de reposo (rx,ry) como coordenada
-   de textura, el dibujo se deforma y se separa con la tela — no es
-   una capa flotante aparte. */
+/* Dos texturas en resolución alta e independiente de la malla física,
+   pintadas sobre la tela deformada con una transformación afín por
+   triángulo (2 por celda): la base de la tela (crema + grano + orla)
+   y el texto por separado, para poder dibujar el texto por encima de
+   las costuras. Al usar la posición de reposo (rx,ry) como coordenada
+   de textura, ambas se deforman y se separan con la tela — no son
+   capas flotantes aparte. */
 const TEX_W = 2000, TEX_H = 1000;
 
 const fabricTex = document.createElement('canvas');
@@ -277,20 +277,24 @@ for (let i = 0; i < 22000; i++) {
 // borde de abajo (no una banda rellena), como la costura vertical
 // entre paños. Al estar en la textura ondula con la caída de la tela.
 const HEM_LINE_FRAC = 0.05;
-fx.strokeStyle = 'rgb(201,154,91)';
+fx.strokeStyle = 'rgba(201,154,91,0.5)';
 fx.lineWidth = 2.5;
 fx.beginPath();
 fx.moveTo(0, TEX_H * (1 - HEM_LINE_FRAC));
 fx.lineTo(TEX_W, TEX_H * (1 - HEM_LINE_FRAC));
 fx.stroke();
 
-// Texto
-fx.fillStyle = 'rgb(224,163,111)';
-fx.textAlign = 'center';
-fx.textBaseline = 'middle';
-fx.font = '800 150px "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", "Yu Gothic", sans-serif';
-fx.fillText('和の「おもてなし」で、', TEX_W / 2, TEX_H * 0.30);
-fx.fillText('旅を彩る。', TEX_W / 2, TEX_H * 0.30 + 175);
+// Texto: en su propia textura (transparente alrededor) para poder
+// pintarlo por encima de las costuras.
+const textTex = document.createElement('canvas');
+textTex.width = TEX_W; textTex.height = TEX_H;
+const tx = textTex.getContext('2d');
+tx.fillStyle = 'rgb(224,163,111)';
+tx.textAlign = 'center';
+tx.textBaseline = 'middle';
+tx.font = '800 150px "Hiragino Maru Gothic ProN", "M PLUS Rounded 1c", "Yu Gothic", sans-serif';
+tx.fillText('和の「おもてなし」で、', TEX_W / 2, TEX_H * 0.30);
+tx.fillText('旅を彩る。', TEX_W / 2, TEX_H * 0.30 + 175);
 
 // Mapea un triángulo de la textura fuente a un triángulo de destino
 // mediante una transformación afín (3 pares de puntos → matriz 2x3).
@@ -385,28 +389,53 @@ function draw(prog) {
 
   }
 
-  // Costuras doradas finas junto a cada hueco entre paños: una a ~30px
-  // hacia dentro del paño izquierdo y su pareja simétrica a ~30px hacia
+  // Costuras doradas finas junto a cada hueco entre paños: una a ~10px
+  // hacia dentro del paño izquierdo y su pareja simétrica a ~10px hacia
   // dentro del paño derecho (el hueco en sí no se rellena con nada).
+  const SEAM_INSET = 10;
+  const insetT = Math.min(1, SEAM_INSET / cellW);
   for (let i = 0; i < strips.length - 1; i++) {
     const a = strips[i].pts;
     const b = strips[i + 1].pts;
-    ctx.strokeStyle = 'rgba(201,154,91,0.55)';
+    ctx.strokeStyle = 'rgba(201,154,91,0.5)';
     ctx.lineWidth = 2;
 
     ctx.beginPath();
     for (let r = 0; r < ROWS; r++) {
-      const p = a[idx(r, COLS - 2)];
-      if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      const edge = a[idx(r, COLS - 1)], inner = a[idx(r, COLS - 2)];
+      const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
+      if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
 
     ctx.beginPath();
     for (let r = 0; r < ROWS; r++) {
-      const p = b[idx(r, 1)];
-      if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      const edge = b[idx(r, 0)], inner = b[idx(r, 1)];
+      const x = edge.x + (inner.x - edge.x) * insetT, y = edge.y + (inner.y - edge.y) * insetT;
+      if (r === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
+  }
+
+  // Texto: se pinta al final, por encima de las costuras.
+  for (const st of strips) {
+    const pts = st.pts;
+    for (let r = 0; r < ROWS - 1; r++) {
+      for (let c = 0; c < COLS - 1; c++) {
+        const p1 = pts[idx(r, c)];
+        const p2 = pts[idx(r, c + 1)];
+        const p3 = pts[idx(r + 1, c + 1)];
+        const p4 = pts[idx(r + 1, c)];
+
+        const t1x = (p1.rx / W) * TEX_W, t1y = ((p1.ry - rodY) / clothH) * TEX_H;
+        const t2x = (p2.rx / W) * TEX_W, t2y = ((p2.ry - rodY) / clothH) * TEX_H;
+        const t3x = (p3.rx / W) * TEX_W, t3y = ((p3.ry - rodY) / clothH) * TEX_H;
+        const t4x = (p4.rx / W) * TEX_W, t4y = ((p4.ry - rodY) / clothH) * TEX_H;
+
+        drawTriangle(textTex, t1x, t1y, t2x, t2y, t4x, t4y, p1.x, p1.y, p2.x, p2.y, p4.x, p4.y);
+        drawTriangle(textTex, t2x, t2y, t3x, t3y, t4x, t4y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y);
+      }
+    }
   }
 
   ctx.restore();
