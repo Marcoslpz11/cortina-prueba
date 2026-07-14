@@ -385,31 +385,18 @@ function draw(prog) {
 
   }
 
-  // Entre paños: en reposo, el viento separa más los bordes hacia abajo
-  // y se vería el fondo de la página por la rendija. Se rellena con el
-  // mismo crema de la tela y se traza encima el hilo dorado — así la
-  // división se lee como una costura, no como un hueco. Durante la
-  // apertura se omite para que las tiras se separen de verdad.
-  if (phase !== 'opening') {
-    for (let i = 0; i < strips.length - 1; i++) {
-      const a = strips[i].pts, b = strips[i + 1].pts;
-      ctx.beginPath();
-      ctx.moveTo(a[idx(0, COLS - 1)].x, a[idx(0, COLS - 1)].y);
-      for (let r = 1; r < ROWS; r++) ctx.lineTo(a[idx(r, COLS - 1)].x, a[idx(r, COLS - 1)].y);
-      for (let r = ROWS - 1; r >= 0; r--) ctx.lineTo(b[idx(r, 0)].x, b[idx(r, 0)].y);
-      ctx.closePath();
-      ctx.fillStyle = 'rgb(247,241,222)';
-      ctx.fill();
-
-      ctx.beginPath();
-      for (let r = 0; r < ROWS; r++) {
-        const p = a[idx(r, COLS - 1)];
-        if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-      }
-      ctx.strokeStyle = 'rgba(201,154,91,0.55)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+  // Costura dorada fina entre paños (el hueco en sí deja ver el fondo
+  // de la web, no se rellena con nada).
+  for (let i = 0; i < strips.length - 1; i++) {
+    const a = strips[i].pts;
+    ctx.beginPath();
+    for (let r = 0; r < ROWS; r++) {
+      const p = a[idx(r, COLS - 1)];
+      if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
     }
+    ctx.strokeStyle = 'rgba(201,154,91,0.55)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   ctx.restore();
