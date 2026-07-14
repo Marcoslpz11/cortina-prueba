@@ -109,7 +109,7 @@ let cellW, cellH, clothH, stripW, gap, strips = [];
 
 function build() {
   resize();
-  gap = 18;                                      // rendija entre tiras
+  gap = 7;                                       // rendija entre tiras
   stripW = (W - gap * (STRIPS - 1)) / STRIPS;    // noren a pantalla completa
   cellW = stripW / (COLS - 1);
   clothH = H * 0.9 - rodY;                       // el noren cubre el 90% del alto, no llega al suelo
@@ -262,11 +262,11 @@ const fx = fabricTex.getContext('2d');
 fx.fillStyle = 'rgb(247,241,222)';
 fx.fillRect(0, 0, TEX_W, TEX_H);
 
-// Grano: motas finas para la rugosidad del tejido
-for (let i = 0; i < 30000; i++) {
+// Grano: motas muy finas y sutiles para la rugosidad del tejido
+for (let i = 0; i < 22000; i++) {
   const gx = Math.random() * TEX_W, gy = Math.random() * TEX_H;
   const dark = Math.random() < 0.5;
-  fx.fillStyle = dark ? 'rgba(70,50,25,0.06)' : 'rgba(255,252,240,0.5)';
+  fx.fillStyle = dark ? 'rgba(70,50,25,0.03)' : 'rgba(255,252,240,0.22)';
   fx.fillRect(gx, gy, 1.6, 1.6);
 }
 
@@ -321,8 +321,8 @@ function draw(prog) {
   }
 
   // Barra
-  ctx.strokeStyle = '#a67c4a';
-  ctx.lineWidth = 7;
+  ctx.strokeStyle = '#8a7156';
+  ctx.lineWidth = 4;
   ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.moveTo(-30, rodY - 2);
@@ -350,6 +350,7 @@ function draw(prog) {
 
         // Sombreado dinámico por compresión horizontal (pliegues): resalte
         // cálido en las crestas que dan a la luz, sombra en los valles.
+        // Sutil a propósito, para no romper la lectura del texto.
         const sh = Math.max(0.55, Math.min(1.25, (p2.x - p1.x) / cellW));
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
@@ -358,12 +359,24 @@ function draw(prog) {
         ctx.lineTo(p4.x, p4.y);
         ctx.closePath();
         if (sh > 1) {
-          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.4, (sh - 1) * 1.6)})`;
+          ctx.fillStyle = `rgba(255,250,235,${Math.min(0.14, (sh - 1) * 0.5)})`;
         } else {
-          ctx.fillStyle = `rgba(90,65,35,${Math.min(0.35, (1 - sh) * 1.4)})`;
+          ctx.fillStyle = `rgba(90,65,35,${Math.min(0.12, (1 - sh) * 0.45)})`;
         }
         ctx.fill();
       }
+    }
+
+    // Costura dorada fina en el borde derecho de la tira (línea entre paños)
+    if (st !== strips[strips.length - 1]) {
+      ctx.beginPath();
+      for (let r = 0; r < ROWS; r++) {
+        const p = pts[idx(r, COLS - 1)];
+        if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.strokeStyle = 'rgba(201,154,91,0.55)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
     }
   }
 
