@@ -276,7 +276,7 @@ for (let i = 0; i < 22000; i++) {
 // Bordado inferior: una única línea fina de hilo dorado cerca del
 // borde de abajo (no una banda rellena), como la costura vertical
 // entre paños. Al estar en la textura ondula con la caída de la tela.
-const HEM_LINE_FRAC = 0.13;
+const HEM_LINE_FRAC = 0.05;
 fx.strokeStyle = 'rgb(201,154,91)';
 fx.lineWidth = 2.5;
 fx.beginPath();
@@ -385,17 +385,27 @@ function draw(prog) {
 
   }
 
-  // Costura dorada fina entre paños (el hueco en sí deja ver el fondo
-  // de la web, no se rellena con nada).
+  // Costuras doradas finas junto a cada hueco entre paños: una a ~30px
+  // hacia dentro del paño izquierdo y su pareja simétrica a ~30px hacia
+  // dentro del paño derecho (el hueco en sí no se rellena con nada).
   for (let i = 0; i < strips.length - 1; i++) {
     const a = strips[i].pts;
-    ctx.beginPath();
-    for (let r = 0; r < ROWS; r++) {
-      const p = a[idx(r, COLS - 1)];
-      if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-    }
+    const b = strips[i + 1].pts;
     ctx.strokeStyle = 'rgba(201,154,91,0.55)';
     ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    for (let r = 0; r < ROWS; r++) {
+      const p = a[idx(r, COLS - 2)];
+      if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    ctx.beginPath();
+    for (let r = 0; r < ROWS; r++) {
+      const p = b[idx(r, 1)];
+      if (r === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
     ctx.stroke();
   }
 
