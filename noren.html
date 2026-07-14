@@ -6,7 +6,7 @@
 <title>Noren — intro de entrada con simulación de tela</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: sans-serif; background: #dd8a42; }
+  body { margin: 0; font-family: sans-serif; background: #f4f1ea; }
 
   /* El contenido real de la web va debajo del canvas */
   #site {
@@ -273,21 +273,13 @@ for (let i = 0; i < 22000; i++) {
   fx.fillRect(gx, gy, 1.6, 1.6);
 }
 
-// Bordado: rejilla de rombos bordados en hilo fino, como en la tela
-// de referencia — dos juegos de líneas diagonales muy sutiles.
-fx.strokeStyle = 'rgba(196,140,88,0.16)';
-fx.lineWidth = 1.4;
-const STITCH = 46;
-fx.beginPath();
-for (let x = -TEX_H; x < TEX_W + TEX_H; x += STITCH) {
-  fx.moveTo(x, 0);
-  fx.lineTo(x + TEX_H, TEX_H);
-}
-for (let x = 0; x < TEX_W + TEX_H; x += STITCH) {
-  fx.moveTo(x, 0);
-  fx.lineTo(x - TEX_H, TEX_H);
-}
-fx.stroke();
+// Orla inferior: banda de tono tostado más suave que la tela base.
+// Al estar en la textura, su borde superior ondula con la caída de
+// la tela igual que el resto del estampado.
+const HEM_FRAC = 0.13;
+const hemY = TEX_H * (1 - HEM_FRAC);
+fx.fillStyle = 'rgb(228,190,138)';
+fx.fillRect(0, hemY, TEX_W, TEX_H - hemY);
 
 // Texto
 fx.fillStyle = 'rgb(224,163,111)';
